@@ -1,6 +1,7 @@
 """
 Integration & Functional Test Suite
-Verifies all Main Dashboard sections, REST APIs, ML Model, Bank Connection, and Transaction Monitoring.
+Verifies all Main Dashboard sections, REST APIs, ML Model, Bank Connection,
+Bangladesh MFS (bKash, Nagad, Rocket), and Transaction Monitoring.
 """
 import unittest
 import json
@@ -116,7 +117,7 @@ class FraudDashboardTestCase(unittest.TestCase):
         bank_page = self.client.get("/bank")
         self.assertEqual(bank_page.status_code, 200)
         self.assertIn(b"CONNECT", bank_page.data)
-        self.assertIn(b"Select Your Banking Institution", bank_page.data)
+        self.assertIn(b"Select Banking Institution", bank_page.data)
 
         tx_page = self.client.get("/transactions")
         self.assertEqual(tx_page.status_code, 200)
@@ -127,7 +128,13 @@ class FraudDashboardTestCase(unittest.TestCase):
         self.assertEqual(inst_res.status_code, 200)
         data = inst_res.get_json()
         self.assertTrue(data["success"])
-        self.assertGreater(len(data["banks"]), 4)
+        self.assertGreater(len(data["banks"]), 8)
+
+        # Verify bKash, Nagad, and Rocket are in the supported institutions
+        ids = [b["id"] for b in data["banks"]]
+        self.assertIn("bkash", ids)
+        self.assertIn("nagad", ids)
+        self.assertIn("rocket", ids)
 
     def test_10_bank_connect_authorization_demo_mode(self):
         """Test secure bank authorization, masked numbers, and simulated demo labeling (Req 4, 5, 11, 12)."""
@@ -181,6 +188,54 @@ class FraudDashboardTestCase(unittest.TestCase):
         status_res2 = self.client.get("/api/bank/status")
         conn2 = status_res2.get_json()["connection"]
         self.assertEqual(conn2["connection_status"], "CONNECTED")
+
+    def test_13_bangladesh_mfs_connections(self):
+        """Test Bangladesh MFS providers: bKash (bikash), Nagad (nogod), Rocket."""
+        # 1. Test bKash with alias 'bikash'
+        res_bkash = self.client.post("/api/bank/connect", json={
+            "institution_id": "bikash",
+            "account_type": "Personal Wallet"
+        })
+        self.assertEqual(res_bkash.status_code, 200)
+        bkash_data = res_bkash.get_json()["connection"]
+        self.assertEqual(bkash_data["institution_id"], "bkash")
+        self.assertEqual(bkash_data["currency"], "BDT")
+        self.assertTrue(bkash_data["masked_account_number"].startswith("+880 17"))
+
+        # 2. Test Nagad with alias 'nogod'
+        res_nagad = self.client.post("/api/bank/connect", json={
+            "institution_id": "nogod",
+            "account_type": "Personal Wallet"
+        })
+        self.assertEqual(res_nagad.status_code, 200)
+        nagad_data = res_nagad.get_json()["connection"]
+        self.assertEqual(nagad_data["institution_id"], "nagad")
+        self.assertEqual(nagad_data["currency"], "BDT")
+        self.assertTrue(nagad_data["masked_account_number"].startswith("+880 16"))
+
+        # 3. Test Rocket
+        res_rocket = self.client.post("/api/bank/connect", json={
+            "institution_id": "rocket",
+            "account_type": "Personal Wallet"
+        })
+        self.assertEqual(res_rocket.status_code, 200)
+        rocket_data = res_rocket.get_json()["connection"]
+        self.assertEqual(rocket_data["institution_id"], "rocket")
+        self.assertEqual(rocket_data["currency"], "BDT")
+        self.assertTrue(rocket_data["masked_account_number"].startswith("+880 19"))
+        self.assertIn("-", rocket_data["masked_account_number"]) # Rocket check digit format
+
+        # 4. Verify transaction feeds for Rocket have BDT currency and Tor fraud flag
+        tx_res = self.client.get("/api/bank/transactions")
+        self.assertEqual(tx_res.status_code, 200)
+        tx_data = tx_res.get_json()
+        self.assertTrue(tx_data["success"])
+        self.assertEqual(tx_data["connection"]["currency"], "BDT")
+        self.assertGreater(len(tx_data["transactions"]), 0)
+        
+        flagged_tx = next((t for t in tx_data["transactions"] if t["origin_ip"] == "185.220.101.5"), None)
+        self.assertIsNotNone(flagged_tx)
+        self.assertEqual(flagged_tx["fraud_status"], "FLAGGED")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
